@@ -2,25 +2,30 @@ library(ecb)
 library(eurostat)
 library(zoo)
 library(RJDemetra)
-
 ############################### DATA GATHERING & CLEANING ###############################  
 
-##EURIBOR_3M
-euri<-get_eurostat(
-    "irt_st_q",
-    time_format="date",
-    filters=list(geo="EA",int_rt="IRT_M3")
-)
-euribor <- ts(euri$values,start=c(substr(euri$time[1],1,4),1), freq=4)
+#Choose begin date & end date#
 
-##GDP
+begin <- 1999 #Q1
+endate <- 2008 #Q4
+
+#EURIBOR_3M#
+
+euri<-get_eurostat(
+  "irt_st_q",
+  time_format="date",
+  filters=list(geo="EA",int_rt="IRT_M3",sinceTimePeriod=paste(begin,"Q1",sep=""))
+)
+euribor<-ts(euri$values[1:((1+endate-begin)*4)],start=c(str_sub(euri$time[1],1,4),1,1), freq=4)
+
+#GDP#
 
 gdp<-get_eurostat(
-    "namq_10_gdp",
-    time_format="date",
-    filters=list(geo="EA", s_adj="NSA", na_item="B1GQ", unit="CLV10_MEUR")
-)  # La série désaisonnalisée n'est pas disponible au niveau agrégé
-gdp <- ts(gdp$values,start=c(substr(gdp$time[1],1,4),1), freq=4)
+  "namq_10_gdp",
+  time_format="date",
+  filters=list(geo="EA", s_adj="NSA", na_item="B1GQ", unit="CLV10_MEUR",sinceTimePeriod = paste(begin-1,"Q1",sep=""))
+)
+gdp <- ts(gdp$values[1:((2+endate-begin)*4)],start=c(substr(gdp$time[1],1,4),1), freq=4)
 spec_sa <- x13_spec("RSA4c",
                     usrdef.outliersEnabled = TRUE,
                     usrdef.outliersDate = c("2020-01-01",
@@ -29,34 +34,41 @@ spec_sa <- x13_spec("RSA4c",
                                             "2020-10-01"),
                     usrdef.outliersType = rep("AO",4))
 x13_gdp <- x13(gdp,spec_sa)
-dlgdp <- diff(log(x13_gdp$final$series[,"sa"]))
+dlgdp <-as.ts(tail(as.zoo(diff(log(x13_gdp$final$series[,"sa"]))),-3))
 
-##unemployment
-# Extraction du taux de chômage harmonisé pour les personnes de 15 à 74 ans,
-# En ne faisant pas de distinction par sexe et en prenant le pourcentage dans la population active
+#Unemployment#
+
 unem<-get_eurostat(
-    "une_rt_q",
-    time_format="date",
-    filters=list(age = "Y15-74", geo="EA19",sex="T",s_adj = "SA", unit="PC_ACT")
-) 
-unemp<-ts(unem$values,start=c(substr(unem$time[1],1,4),1), freq=4)
+  "une_rt_q",
+  time_format="date",
+  filters=list(age = "Y15-74", geo="EA19",sex="T",s_adj = "NSA", unit="PC_ACT",sinceTimePeriod = paste(begin,"Q1",sep=""))
+)
+unemp<-ts(unem$values[1:((1+endate-begin)*4)],start=c(str_sub(unem$time[1],1,4),1,1), freq=4)
 
-##inflation and underlying inflation (From ECB database)
+#Inflation and underlying inflation (From ECB database)#
 
 hicp <-get_data("ICP.M.U2.N.000000.4.ANR",
-                filter = list(startPeriod ="1997-01")
+                filter = list(startPeriod =paste(begin,"-01",sep=""),endPeriod=paste(endate,"-12",sep=""))
 )
-hicp<-ts(hicp$obsvalue,start=c(1997,1), freq=12)
-hicpq <- aggregate(as.zoo(hicp), yearqtr, mean)
-hicpq <- as.ts(hicpq)
 
 infex <-get_data("ICP.M.U2.N.XEF000.4.ANR",
-                 filter = list(startPeriod ="1997-01")
+                filter = list(startPeriod =paste(begin,"-01",sep=""),endPeriod=paste(endate,"-12",sep=""))
 )
-infex<-ts(infex$obsvalue,start=1997, freq=12)
-infexq <- aggregate(as.zoo(infex), yearqtr, mean)
-infexq <- as.ts(infexq)
+long<-nrow(infex)/3
 
+#Function: Month to Quarter converter for ECB data#
+
+monthly_to_quarterly <- function(month) {
+  quarter<-matrix(0,long,1)
+  for (v in (1:long)){
+    quarter[v] = mean(c(month$obsvalue[3*v],month$obsvalue[3*v-1],month$obsvalue[3*v-2]))
+  }
+  quarter<-ts(quarter,start=c(str_sub(hicp$obstime[1],1,4),1,1), freq=4)
+  return(quarter)
+}
+
+hicpq<-monthly_to_quarterly(hicp)
+infexq<-monthly_to_quarterly(infex)
 
 data <- ts.union(euribor, dlgdp, unemp, hicpq, infexq)
 colnames(data)<-cbind("EURIBOR_3M", "dlGDP","unemployment","inflation","underinf")
